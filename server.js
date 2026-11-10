@@ -2,8 +2,21 @@ const WebSocket = require('ws');
 const PORT = process.env.PORT || 8080;
 const wss = new WebSocket.Server({ port: PORT });
 
-// Track active connections by room and user ID
 const rooms = {};
+
+// Helper to broadcast the updated list of rooms and their current user counts
+function broadcastRoomList() {
+    const list = Object.keys(rooms).map(roomName => ({
+        name: roomName,
+        count: rooms[roomName].length
+    })).filter(r => r.count > 0);
+
+    wss.clients.forEach(client => {
+        if (client.readyState === WebSocket.OPEN) {
+            client.send(JSON.stringify({ dataType: 'room-list', rooms: list }));
+        }
+    });
+}
 
 wss.on('connection', (ws) => {
     let currentRoom = null;
@@ -13,7 +26,6 @@ wss.on('connection', (ws) => {
         try {
             const data = JSON.parse(message);
 
-            // 1. Handle Join Room
             if (data.type === 'join') {
                 currentRoom = data.room;
                 currentUser = data.user;
@@ -21,7 +33,6 @@ wss.on('connection', (ws) => {
 
                 if (!rooms[currentRoom]) rooms[currentRoom] = [];
                 
-                // Let everyone else in the room know a new peer arrived to start WebRTC
                 rooms[currentRoom].forEach(client => {
                     if (client.readyState === WebSocket.OPEN) {
                         client.send(JSON.stringify({ type: 'new-peer', user: currentUser }));
@@ -30,34 +41,34 @@ wss.on('connection', (ws) => {
 
                 rooms[currentRoom].push(ws);
                 console.log(`${currentUser} joined room: ${currentRoom}`);
+                broadcastRoomList();
             } 
-            
-            // 2. Handle Broadcast & WebRTC Signaling
             else if (data.type === 'broadcast' && currentRoom) {
                 rooms[currentRoom].forEach(client => {
-                    // If target client is specified (for WebRTC handshakes), route only to them
                     if (data.to) {
                         if (client.username === data.to && client.readyState === WebSocket.OPEN) {
                             client.send(JSON.stringify(data));
                         }
-                    } 
-                    // Otherwise, broadcast chat messages universally to everyone else
-                    else if (client !== ws && client.readyState === WebSocket.OPEN) {
+                    } else if (client !== ws && client.readyState === WebSocket.OPEN) {
                         client.send(JSON.stringify(data));
                     }
                 });
             }
         } catch (e) {
-            console.error("Payload parse error");
+            console.error("Payload error");
         }
     });
 
     ws.on('close', () => {
         if (currentRoom && rooms[currentRoom]) {
             rooms[currentRoom] = rooms[currentRoom].filter(client => client !== ws);
+            if (rooms[currentRoom].length === 0) {
+                delete rooms[currentRoom];
+            }
             console.log(`${currentUser} left room: ${currentRoom}`);
+            broadcastRoomList();
         }
     });
 });
 
-console.log(`Digital Sleepover Server operational on port ${PORT}`);
+console.log(`Digital Sleepover Server running on port ${PORT}`);
