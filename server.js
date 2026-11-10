@@ -4,7 +4,7 @@ const wss = new WebSocket.Server({ port: PORT });
 
 const rooms = {};
 
-// Helper to broadcast the updated list of rooms and their current user counts
+// Helper function to broadcast room populations globally
 function broadcastRoomList() {
     const list = Object.keys(rooms).map(roomName => ({
         name: roomName,
@@ -14,6 +14,18 @@ function broadcastRoomList() {
     wss.clients.forEach(client => {
         if (client.readyState === WebSocket.OPEN) {
             client.send(JSON.stringify({ dataType: 'room-list', rooms: list }));
+        }
+    });
+}
+
+// Helper function to tell players in a specific room exactly who is online right now
+function broadcastUserList(roomName) {
+    if (!rooms[roomName]) return;
+    const users = rooms[roomName].map(client => client.username).filter(Boolean);
+    
+    rooms[roomName].forEach(client => {
+        if (client.readyState === WebSocket.OPEN) {
+            client.send(JSON.stringify({ dataType: 'user-list', users: users }));
         }
     });
 }
@@ -41,7 +53,9 @@ wss.on('connection', (ws) => {
 
                 rooms[currentRoom].push(ws);
                 console.log(`${currentUser} joined room: ${currentRoom}`);
+                
                 broadcastRoomList();
+                broadcastUserList(currentRoom);
             } 
             else if (data.type === 'broadcast' && currentRoom) {
                 rooms[currentRoom].forEach(client => {
@@ -62,10 +76,13 @@ wss.on('connection', (ws) => {
     ws.on('close', () => {
         if (currentRoom && rooms[currentRoom]) {
             rooms[currentRoom] = rooms[currentRoom].filter(client => client !== ws);
+            console.log(`${currentUser} left room: ${currentRoom}`);
+            
             if (rooms[currentRoom].length === 0) {
                 delete rooms[currentRoom];
+            } else {
+                broadcastUserList(currentRoom);
             }
-            console.log(`${currentUser} left room: ${currentRoom}`);
             broadcastRoomList();
         }
     });
